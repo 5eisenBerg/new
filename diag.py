@@ -112,3 +112,4 @@ if __name__ == "__main__":
     log_df = run_deep_diagnostic()
     if log_df is not None:
         analyze_deep_diagnostic(log_df)
+
