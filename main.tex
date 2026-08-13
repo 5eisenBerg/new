@@ -1,0 +1,238 @@
+\documentclass[runningheads,a4paper]{llncs}
+
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{siunitx}
+\usepackage{url}
+\usepackage{hyperref}
+\usepackage{xcolor}
+
+\hypersetup{
+pdftitle={Energy-Aware Priority Scheduling in Smart Sensor Networks Using Policy-Guided Deep Reinforcement Learning},
+pdfauthor={Radhika.N; Radhika.G; Anand Emmanuel Raju.B},
+pdfsubject={ICTSES 2026 submission},
+pdfkeywords={Smart Energy Systems, Wireless Sensor Networks, Reinforcement Learning, ns-3, QoS, Priority Scheduling}
+}
+
+\title{Energy-Aware Priority Scheduling in Smart Sensor Networks Using Policy-Guided Deep Reinforcement Learning}
+
+\titlerunning{Energy-Aware Priority Scheduling in Smart Sensor Networks}
+
+\author{Radhika N.\inst{1} \and Radhika G.\inst{1} \and Anand Emmanuel Raju B.\inst{1}}
+
+\authorrunning{N. Radhika et al.}
+
+\institute{
+Department of Computer Science and Engineering,\\
+Amrita School of Computing, Coimbatore,\\
+Amrita Vishwa Vidyapeetham, India \\
+\email{n_radhika@cb.amrita.edu, g_radhika@cb.amrita.edu, cb.sc.p2cse25003@cb.students.amrita.edu}
+}
+
+\begin{document}
+\maketitle
+
+\begin{center}
+\small
+Department of Computer Science and Engineering\\
+Amrita School of Computing, Coimbatore\\
+Amrita Vishwa Vidyapeetham, India\\
+\texttt{n\_radhika@cb.amrita.edu, g\_radhika@cb.amrita.edu, cb.sc.p2cse25003@cb.students.amrita.edu}
+\end{center}
+
+\begin{abstract}
+This paper studies deep reinforcement learning (DRL) for packet scheduling in a dynamic wireless sensor network (WSN) carrying mixed high-priority (HP) and normal traffic. We couple ns-3 and OpenAI Gym through ns3-gym and train a prioritized-replay Double DQN scheduler with policy guidance that protects urgent HP service while penalizing wasteful behavior. Evaluation is performed with fixed seeds and repeated runs, using Strict Priority and Random as baselines. Across 20 matched evaluation runs that reuse the same environment seeds across policies, the learned policy strongly improves over Random and maintains high HP delivery, but remains below Strict Priority on throughput, packet-delivery ratio, HP delay, and HP delivery ratio. The results establish a clear performance boundary for this configuration and identify where objective redesign is required to improve HP-centric QoS. The paper contributes an artifact-backed pipeline, a priority-aware reward design with explicit HP-delivery instrumentation, and a statistically analyzed benchmark for future constrained and safety-aware DRL schedulers in WSNs.
+\end{abstract}
+
+\keywords{Smart Energy Systems \and Wireless Sensor Networks \and Reinforcement Learning \and ns-3 \and QoS \and Priority Scheduling}
+
+\section{Introduction}
+Wireless sensor networks (WSNs) frequently operate under strict energy budgets, bursty load, and mixed-criticality traffic classes. In these conditions, scheduling decisions directly affect packet delivery ratio (PDR), deadline compliance, and battery lifetime \cite{frikha2021wrlsurvey,leong2020automatica}. In particular, high-priority (HP) traffic must be served reliably and with low delay, even when normal traffic rises.
+
+In smart energy systems, these constraints are central: sensing nodes must preserve lifetime while reliably reporting protection, fault, or control events with higher urgency than routine telemetry. This makes energy-aware, priority-aware communication scheduling a direct systems challenge at the intersection of communication technologies and intelligent computing.
+
+Rule-based schedulers such as Strict Priority are attractive because they are simple and predictable, but they can be rigid when traffic patterns, congestion, or residual-energy profiles change. Deep reinforcement learning (DRL) offers adaptive control but introduces its own risks: unstable policies, reward misspecification, and fairness collapse in highly stochastic networking environments \cite{luong2019drlsurvey,nagib2023safe}.
+
+This work evaluates a policy-guided Double DQN scheduler in an ns-3 + ns3-gym simulation loop \cite{ns3gym,boni2021ns3gym}. Rather than claiming universal superiority, we ask a narrower and practically meaningful question: can a learned policy provide robust HP service while remaining competitive with a strong handcrafted baseline under repeatable evaluation conditions?
+
+The main contributions are:
+\begin{itemize}
+    \item A reproducible end-to-end pipeline for DRL-based WSN scheduling with ns-3 and ns3-gym, including artifact export for run-level verification.
+    \item A priority-aware reward and validation design that explicitly tracks HP generation, HP delivery, and HP delay.
+    \item A run-level statistical comparison against Strict Priority and Random over 20 matched evaluation runs.
+    \item An empirical characterization of the policy trade-off: improved normal-traffic latency and large gains over Random, but weaker HP-centric QoS than Strict Priority.
+\end{itemize}
+
+\section{Related Work}
+Recent surveys summarize how RL and DRL are increasingly applied to communication systems, including scheduling, routing, and medium access control \cite{luong2019drlsurvey,frikha2021wrlsurvey}. These studies report strong potential, but also emphasize deployment barriers such as sample inefficiency, safety guarantees, and transferability across traffic regimes.
+
+In WSN-specific contexts, DRL has been investigated for sensor scheduling, routing, and energy-aware operation. Leong \textit{et al.} use DRL for wireless sensor scheduling in cyber-physical systems, showing that learning-based control can handle dynamic uncertainties \cite{leong2020automatica}. Sharma and Chauhan propose distributed RL scheduling for coverage/connectivity maintenance \cite{sharma2020wsn}. Dutta and Biswas study distributed RL for scalable medium access in IoT/sensor settings \cite{dutta2022comnet}. Barker and Swany analyze cooperative RL for WSN routing \cite{barker2022wcnc}.
+
+Recent networking papers also examine specialized objectives relevant to this work, such as sleep scheduling and safe RL constraints. Mishra and Liang present RL-driven dynamic sleep scheduling for wireless sensor transmissions \cite{mishra2023sleep}. Nagib \textit{et al.} discuss safe and accelerated DRL design choices for next-generation wireless systems \cite{nagib2023safe}. Kim \textit{et al.} demonstrate DRL-based adaptive scheduling in wireless time-sensitive networking \cite{kim2024wtsn}.
+
+Compared with prior work, this paper targets a systems-level contribution: explicit HP-service instrumentation, validation-gated model selection, and an artifact-backed benchmark that can be independently checked at run level.
+
+\section{System Model and Problem Formulation}
+\subsection{Network and Traffic Model}
+We simulate 100 sensor nodes and one sink, with queue-aware state and dynamic network conditions. The control interval is 100 ms. Each episode spans 5000 decision steps. Traffic contains two service classes: HP and normal. Per-class queueing and timeout behavior are tracked by the simulator and exported as end-of-episode metrics.
+
+\subsection{MDP Definition}
+At each decision step, the scheduler observes a 6-dimensional normalized state vector
+\begin{equation}
+\mathbf{s}_t = [q_t^{N},\; q_t^{H},\; e_t,\; a_t^{N},\; a_t^{H},\; d_t],
+\end{equation}
+where $q_t^{N}$ and $q_t^{H}$ are normal/HP queue occupancy proxies, $e_t$ is residual-energy proxy, $a_t^{N}$ and $a_t^{H}$ represent normalized oldest-packet ages, and $d_t$ is a neighborhood-density proxy.
+
+The action space is discrete:
+\begin{equation}
+\mathcal{A} = \{\text{send HP},\; \text{send normal},\; \text{drop normal},\; \text{sleep},\; \text{drop HP}\}.
+\end{equation}
+
+\subsection{Reward Design}
+The reward combines delivery gains, penalties for drops/timeouts, delay pressure, energy usage, and policy guidance. Let $r_t^{\text{base}}$ denote the weighted sum of transmission and penalty terms and $r_t^{\text{guide}}$ the HP-guidance term. The total reward is
+\begin{equation}
+r_t = \tanh\left(\frac{r_t^{\text{base}} + r_t^{\text{guide}}}{100}\right).
+\end{equation}
+
+Policy guidance is defined as
+\begin{equation}
+r_t^{\text{guide}}=
+\begin{cases}
++\alpha, & a_t=\text{send HP and } q_t^{H}>0\\
+-\beta, & a_t\neq\text{send HP},\ q_t^{H}>0,\ a_t^{H}>\tau_u\\
+0, & \text{otherwise}
+\end{cases}
+\end{equation}
+with $\alpha=6.0$, $\beta=8.0$, and urgency threshold $\tau_u=0.55$. This soft guidance avoids hard-coded imitation of Strict Priority while discouraging neglect of urgent HP packets.
+
+\section{Methodology}
+\subsection{Learning Agent}
+The learning agent uses a Double DQN-style target construction with prioritized replay, soft target-network updates, gradient clipping, and cosine learning-rate scheduling. Replay capacity is 100k transitions and warm-up is 4k steps. The design aligns with common DRL-for-networking patterns reported in recent surveys \cite{luong2019drlsurvey,frikha2021wrlsurvey}.
+
+Training uses $\epsilon$-greedy exploration with multiplicative decay to a floor of 0.05. For evaluation, $\epsilon$ is set to zero. This separation reduces evaluation noise caused by exploration artifacts.
+
+\subsection{Baselines}
+\begin{itemize}
+    \item \textbf{Strict Priority}: serves HP whenever available, else normal, else sleep.
+    \item \textbf{Random}: uniform random action selection.
+\end{itemize}
+
+\subsection{Training and Evaluation Protocol}
+Training and evaluation are seed-controlled. The model is selected by validation score over five fixed validation seeds. Final reporting uses 20 matched evaluation runs per policy.
+
+The same 20 environment seeds are reused across all policies to keep evaluation conditions matched run-by-run.
+
+The validation score combines PDR, PLR, HP delivery ratio, and HP delay into a bounded scalar objective, with an additional penalty when HP packets are generated but none are delivered. This addresses a previously observed failure mode in which naive scoring can hide HP starvation.
+
+\subsection{Experimental Setup}
+Table~\ref{tab:setup} summarizes the core simulator and training configuration used for the reported V76 results.
+
+\begin{table}[t]
+\centering
+\caption{Simulation and training configuration (V76).}
+\label{tab:setup}
+\scriptsize
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{ll}
+\toprule
+Category & Value \\
+\midrule
+Simulator & ns-3.40 with ns3-gym interface \\
+Nodes / sink & 100 nodes + 1 sink \\
+Control interval & 100 ms \\
+Episode length & 5000 steps \\
+Training epochs & 50 (early stopping patience: 15) \\
+Evaluation runs & 20 per policy \\
+State / action size & 6 / 5 \\
+Replay buffer & 100,000 (prioritized replay) \\
+Mini-batch size & 128 \\
+Warm-up steps & 4000 \\
+Discount factor $\gamma$ & 0.99 \\
+Optimizer & Adam ($1\times10^{-4}$ initial LR) \\
+Target update & Soft update ($\tau=0.005$) \\
+Exploration & $\epsilon$: 1.0 $\rightarrow$ 0.05, decay 0.99995 \\
+Random seeds & Global base seed + fixed validation seeds \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Metrics and Statistical Testing}
+Primary metrics are throughput, PDR, PLR, average normal delay, average HP delay, energy per delivered bit, and HP delivery ratio. We report mean $\pm$ 95\% confidence interval (CI).
+
+For pairwise comparison (DQN vs. Strict Priority), runs are matched by seed. Normality is assessed on paired differences using the Shapiro--Wilk test at $\alpha=0.05$. We use a paired $t$-test when the paired differences pass normality checks; otherwise we use the Wilcoxon signed-rank test. Effect size is reported as paired Cohen's $d_z$, computed from the 20 run-level paired differences.
+
+Implementation uses a Python control loop connected to ns-3 via ns3-gym. Seeds are fixed across Python, NumPy, and PyTorch for run reproducibility. All reported summary values are generated from exported run-level artifacts (`raw_results_v76.csv`, `training_log_v76.csv`, `final_results_v76.xlsx`).
+
+\section{Results}
+\input{tables/table_results}
+
+Table~\ref{tab:main_results} shows that the proposed policy-guided DQN clearly improves over Random across all key metrics, but does not exceed Strict Priority in this workload.
+
+Against Random, policy-guided DQN improves throughput (7.0267 vs. 2.8000 kbps), PDR (50.33\% vs. 20.07\%), HP delay (0.1431 vs. 0.3521 s), and energy efficiency (443.87 vs. 806.70 nJ/bit). Against Strict Priority, however, DQN is behind on throughput, PDR, PLR, HP delay, and HP delivery ratio. A positive trade-off is that DQN yields lower normal-packet delay than Strict Priority.
+
+\input{tables/table_stats}
+
+Statistical tests in Table~\ref{tab:stats} indicate that most DQN-vs-Strict differences are significant, with large effect sizes for throughput, PDR, and HP-delay-related outcomes.
+
+\subsection{Training Dynamics and Policy Behavior}
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=\columnwidth]{figures/fig_1_learning_curve.png}
+    \caption{Training progression and validation-score trend (V76).}
+    \label{fig:learning}
+\end{figure}
+
+\subsection{Comparative Views}
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=\columnwidth]{figures/fig_4_bar_charts.png}
+    \caption{Policy comparison using means and confidence intervals across key metrics.}
+    \label{fig:bar}
+\end{figure}
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=\columnwidth]{figures/fig_5_delay_cdf.png}
+    \caption{Delay CDF comparison for normal and HP traffic.}
+    \label{fig:cdf}
+\end{figure}
+
+\subsection{Interpretation}
+Figure~\ref{fig:learning} indicates stable training progression and a convergent validation trend, suggesting the policy did not diverge.
+
+Figures~\ref{fig:bar} and \ref{fig:cdf} show the same pattern as the numeric tables: DQN is consistently above Random and below Strict Priority for HP-centric service quality. The learned controller remains stable and clearly non-random, but does not yet achieve strict-priority-level HP delay.
+
+\subsection{Trade-Off Interpretation}
+The central finding is straightforward: the learned policy is clearly stronger than Random, but does not outperform Strict Priority on HP-centric QoS in this scenario. The interesting behavior is in the middle ground: DQN maintains high HP delivery while reducing normal-packet delay relative to Strict Priority. This suggests that the learned controller is balancing objectives rather than collapsing into random behavior.
+
+\subsection{Error Pattern Analysis}
+The observed performance gap is consistent with objective misalignment under competition between urgency and efficiency terms. DQN reduces normal delay and avoids the pathological no-HP-delivery behavior observed in earlier development stages, but this comes with insufficient aggressiveness on ultra-low HP-delay optimization when compared with Strict Priority.
+
+Another practical observation is that reward improvements in training do not always map linearly to deployment-facing metrics. This reinforces the need for metric-level model selection and post-training stress testing rather than relying on reward curves alone.
+
+For deployment-oriented WSN systems, these results suggest a pragmatic policy choice. If the operational requirement is strict minimization of HP delay, Strict Priority remains the safer default in this scenario. If adaptive balancing between classes and energy is required, DRL remains promising but likely needs explicit safety constraints or hybrid fallback rules.
+
+\section{Discussion}
+The DRL policy is viable and stable under policy guidance, and HP starvation is no longer hidden because HP generation/delivery are explicitly tracked. Still, baseline superiority suggests that one or more factors constrain performance: (i) limited observability in the compact 6D state, (ii) reward-weight mismatch between short-term delay control and long-term throughput, or (iii) policy-class limitations under highly variable traffic.
+
+Future work should prioritize constrained/safe RL formulations, richer function approximation (e.g., distributional or dueling variants), and stronger generalization protocols (domain randomization and out-of-distribution traffic tests) \cite{nagib2023safe,kim2024wtsn}. Adding stronger non-RL adaptive baselines (e.g., weighted-priority or deadline-aware heuristics) is also necessary for broader comparative validity.
+
+\section{Threats to Validity}
+Results are tied to the selected simulator configuration, traffic intensity, timeout settings, and channel assumptions. Although seeds are controlled and repeated, conclusions can change under different workloads or hardware constraints. The study is simulation-based; direct deployment claims are out of scope.
+
+Another validity risk is objective selection: emphasizing HP service can reduce normal-service aggressiveness. Simulator-to-reality transfer is also a known gap, and broader baseline coverage is still needed beyond Strict Priority and Random.
+
+\section{Conclusion}
+This study presents an end-to-end reproducible DRL scheduling pipeline for dynamic WSNs using ns-3 and ns3-gym. The proposed policy significantly outperforms Random and maintains high HP service, but does not surpass Strict Priority in the current scenario. The value of this work is a transparent benchmark with full artifacts, explicit HP-service instrumentation, and statistically grounded analysis that can guide next-generation constrained/safe DRL schedulers.
+
+In summary, the contribution is methodological and empirical: we provide a reliable benchmark, identify concrete failure/gap patterns, and establish a reproducible foundation for stronger constrained RL designs targeted at smart-energy communication networks.
+
+\section*{Reproducibility Package}
+The submission package includes the exact result CSV, training log, summary workbook, and the figures/tables used in this manuscript.
+
+\bibliographystyle{splncs04}
+\bibliography{references}
+
+\end{document}
